@@ -1,0 +1,220 @@
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: synthetiq-postgres
+    command:
+      - "postgres"
+      - "-c"
+      - "wal_level=minimal"
+      - "-c"
+      - "max_wal_senders=0"
+      - "-c"
+      - "max_replication_slots=0"
+      - "-c"
+      - "shared_preload_libraries="
+    environment:
+      POSTGRES_DB: synthetiq_cdp
+      POSTGRES_USER: synthetiq_user
+      POSTGRES_PASSWORD: synthetiq_pass_dev
+      POSTGRES_INITDB_ARGS: "-E UTF8"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infrastructure/db/init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U synthetiq_user -d synthetiq_cdp"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - synthetiq-network
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: synthetiq-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - synthetiq-network
+
+  # FastAPI Backend
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: development
+    container_name: synthetiq-backend
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    environment:
+      DATABASE_URL: postgresql://synthetiq_user:synthetiq_pass_dev@postgres:5432/synthetiq_cdp
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET_KEY: dev_secret_key_change_in_production
+      JWT_ALGORITHM: HS256
+      JWT_ACCESS_TOKEN_EXPIRE_MINUTES: 30
+      STRIPE_PUBLIC_KEY: ${STRIPE_PUBLIC_KEY:-pk_test_placeholder}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-sk_test_placeholder}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-whsec_placeholder}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      ECR_REPOSITORY_URL: ${ECR_REPOSITORY_URL:-}
+      SENDGRID_API_KEY: ${SENDGRID_API_KEY:-}
+      FROM_EMAIL: noreply@synthetiqsignals.local
+      APP_ENV: development
+      CORS_ORIGINS: http://localhost:80,http://localhost:3000
+      API_PREFIX: /api/v1
+      LOG_LEVEL: DEBUG
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+      - backend_uploads:/app/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - synthetiq-network
+    restart: unless-stopped
+
+  # React + Vite Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: development
+    container_name: synthetiq-frontend
+    command: npm run dev
+    environment:
+      VITE_API_URL: http://localhost:8000/api/v1
+      VITE_STRIPE_PUBLIC_KEY: ${STRIPE_PUBLIC_KEY:-pk_test_placeholder}
+    ports:
+      - "80:80"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    depends_on:
+      - backend
+    networks:
+      - synthetiq-network
+    restart: unless-stopped
+
+  # Celery Worker (for async tasks)
+  celery-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: development
+    container_name: synthetiq-celery-worker
+    command: celery -A app.celery_app worker --loglevel=info
+    environment:
+      DATABASE_URL: postgresql://synthetiq_user:synthetiq_pass_dev@postgres:5432/synthetiq_cdp
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      SENDGRID_API_KEY: ${SENDGRID_API_KEY:-}
+      FROM_EMAIL: noreply@synthetiqsignals.local
+      APP_ENV: development
+      LOG_LEVEL: INFO
+    volumes:
+      - ./backend:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - synthetiq-network
+    restart: unless-stopped
+    profiles:
+      - celery
+
+  # Celery Beat (for scheduled tasks)
+  celery-beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: development
+    container_name: synthetiq-celery-beat
+    command: celery -A app.celery_app beat --loglevel=info
+    environment:
+      DATABASE_URL: postgresql://synthetiq_user:synthetiq_pass_dev@postgres:5432/synthetiq_cdp
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      APP_ENV: development
+      LOG_LEVEL: INFO
+    volumes:
+      - ./backend:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - synthetiq-network
+    restart: unless-stopped
+    profiles:
+      - celery
+
+  # pgAdmin (Database Management UI - Optional)
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: synthetiq-pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@synthetiq.local
+      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      - postgres
+    networks:
+      - synthetiq-network
+    restart: unless-stopped
+    profiles:
+      - tools
+
+  # Mailhog (Email Testing - Optional)
+  mailhog:
+    image: mailhog/mailhog:latest
+    container_name: synthetiq-mailhog
+    ports:
+      - "1025:1025"  # SMTP server
+      - "8025:8025"  # Web UI
+    networks:
+      - synthetiq-network
+    restart: unless-stopped
+    profiles:
+      - tools
+
+networks:
+  synthetiq-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  backend_uploads:
+    driver: local
+  pgadmin_data:
+    driver: local
