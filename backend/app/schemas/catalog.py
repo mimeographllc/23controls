@@ -21,10 +21,20 @@ class CategoryBase(BaseModel):
     is_active: bool = True
 
 
+# class CategoryCreate(CategoryBase):
+#     """Create category request"""
+#     parent_id: Optional[int] = None
 class CategoryCreate(CategoryBase):
     """Create category request"""
     parent_id: Optional[int] = None
-
+    
+    @validator('parent_id', pre=True)
+    @classmethod
+    def convert_zero_to_null(cls, v):
+        """Convert 0 to None for root categories"""
+        if v == 0:
+            return None
+        return v
 
 class CategoryUpdate(BaseModel):
     """Update category request"""
@@ -35,6 +45,15 @@ class CategoryUpdate(BaseModel):
     parent_id: Optional[int] = None
     sort_order: Optional[int] = None
     is_active: Optional[bool] = None
+
+    #fix: 0 to none validation on categrories.
+    @validator('parent_id', pre=True)
+    @classmethod
+    def convert_zero_to_null(cls, v):
+        """Convert 0 to None for root categories"""
+        if v == 0:
+            return None
+        return v
 
 
 class CategoryResponse(CategoryBase):
