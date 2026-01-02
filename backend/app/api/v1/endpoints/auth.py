@@ -182,15 +182,24 @@ async def login(
         )
     
     # Create access token
+    # access_token = AuthService.create_access_token(
+    #     data={"sub": user.id, "email": user.email}  # ✅ String
+    # )
+    
+    #fix:
     access_token = AuthService.create_access_token(
-        data={"sub": user.id, "email": user.email}
+        data={"sub": str(user.id), "email": user.email}  # ✅ String
     )
-    
+
     # Create refresh token
+    # refresh_token, jti = AuthService.create_refresh_token(
+    #     data={"sub": user.id}
+    # )
     refresh_token, jti = AuthService.create_refresh_token(
-        data={"sub": user.id}
+        data={"sub": str(user.id)}
     )
-    
+
+
     # Save refresh token to database
     expires_at = datetime.utcnow() + timedelta(days=7)
     await AuthService.save_refresh_token(
@@ -273,10 +282,15 @@ async def refresh_access_token(
         )
     
     # Create new access token
+    # access_token = AuthService.create_access_token(
+    #     data={"sub": user.id, "email": user.email}
+    # )
+    #fix:
     access_token = AuthService.create_access_token(
-        data={"sub": user.id, "email": user.email}
+        data={"sub": str(user.id), "email": user.email}
     )
-    
+
+
     return TokenResponse(
         access_token=access_token,
         refresh_token=refresh_data.refresh_token,  # Same refresh token

@@ -49,7 +49,12 @@ async def get_current_user(
             )
         
         # Get user ID from token
-        user_id: int = payload.get("sub")
+        # BEFORE (Broken)
+        # user_id: int = payload.get("sub")  # ❌ Assumes int
+
+        # AFTER (Fixed)
+        user_id_str: str = payload.get("sub")
+        user_id = int(user_id_str)  # ✅ Convert string to int
         if user_id is None:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
